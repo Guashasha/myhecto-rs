@@ -1,0 +1,7 @@
+{
+  "move_left": "h",
+  "move_right": "l",
+  "move_down": "j",
+  "move_up": "k",
+  "insert_mode": "x"
+  }

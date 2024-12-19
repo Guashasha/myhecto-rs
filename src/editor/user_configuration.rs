@@ -1,6 +1,6 @@
 use std::{fs, io::Error};
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct UserControls {
     pub move_left: char,
     pub move_right: char,
@@ -36,7 +36,7 @@ pub(crate) fn get_user_controls() -> Result<UserControls, Error> {
 }
 
 fn read_config_file() -> Result<String, Error> {
-    let config_file = "hecto.conf";
+    let config_file = "config.json";
     let contents = fs::read_to_string(config_file)?;
     Ok(contents)
 }
