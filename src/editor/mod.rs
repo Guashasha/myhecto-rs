@@ -1,10 +1,12 @@
-use std::fs;
+use std::panic::{set_hook, take_hook};
+
+use log::error;
 
 use crossterm::event::{
-    read,
+    self, read,
     Event::{self, Key},
     KeyCode::{self, Char},
-    KeyModifiers,
+    KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 use terminal::{MovementDirection, Position};
 use view::View;
@@ -18,7 +20,6 @@ pub struct Editor {
     current_mode: EditorMode,
     should_quit: bool,
     location: terminal::Position,
-    position: terminal::Position,
     view: View,
 }
 
@@ -27,28 +28,46 @@ enum EditorMode {
     Insert,
 }
 
-impl Default for Editor {
-    fn default() -> Self {
-        Editor {
-            user_controls: user_configuration::get_user_controls()
-                .expect("Couldn't load custom or default configuration"),
-            current_mode: EditorMode::Normal,
-            should_quit: false,
-            location: Position { x: 0, y: 0 },
-            position: Position { x: 0, y: 0 },
-            view: View::default(),
+impl Drop for Editor {
+    fn drop(&mut self) {
+        terminal::terminate().expect("Couldn't close hecto correctly");
+        if self.should_quit {
+            let _ = terminal::print("\rClosing hecto...");
         }
     }
 }
 
 impl Editor {
-    pub fn run(&mut self, file: Option<&String>) -> Result<(), std::io::Error> {
+    pub fn new(file: Option<&String>) -> Result<Self, std::io::Error> {
+        let current_hook = take_hook();
+        set_hook(Box::new(move |panic_info| {
+            let _ = terminal::terminate();
+            error!("Program panicked by error: {:?}", panic_info);
+            current_hook(panic_info);
+        }));
+
+        let mut editor = Editor {
+            user_controls: user_configuration::get_user_controls().expect(
+                "Couldn't load custom or default configuration, JSON file isn't formatted correctly",
+            ),
+            current_mode: EditorMode::Normal,
+            should_quit: false,
+            location: Position { x: 0, y: 0 },
+            view: View::default(),
+        };
+
         if let Some(file) = file {
-            self.read_file(file);
+            if let Err(err) = editor.view.load_file(file.to_string()) {
+                error!("Couldn't open file: {err}");
+            }
         }
 
         terminal::initialize()?;
 
+        Ok(editor)
+    }
+
+    pub fn run(&mut self) -> Result<(), std::io::Error> {
         loop {
             self.refresh_screen()?;
 
@@ -57,63 +76,25 @@ impl Editor {
                 break;
             }
 
-            let event = read()?;
-            match self.current_mode {
-                EditorMode::Normal => Self::evaluate_normal_event(self, &event)?,
-                EditorMode::Insert => Self::evaluate_insert_event(self, &event)?,
-            }
-        }
-
-        terminal::terminate()
-    }
-
-    fn read_file(&mut self, file_path: &String) -> Result<(), std::io::Error> {
-        let file_contents = fs::read_to_string(file_path)?;
-
-        for line in file_contents.lines() {
-            self.view.fill_buffer(line);
-        }
-
-        Ok(())
-    }
-
-    fn evaluate_normal_event(&mut self, event: &Event) -> Result<(), std::io::Error> {
-        if let Key(event) = *event {
-            match event.code {
-                Char('q') if event.modifiers == KeyModifiers::CONTROL => self.should_quit = true,
-                Char(c) => {
-                    if self.user_controls.move_left == c {
-                        self.move_caret(terminal::MovementDirection::Left, 1)?;
-                    } else if self.user_controls.move_up == c {
-                        self.move_caret(terminal::MovementDirection::Up, 1)?;
-                    } else if self.user_controls.move_down == c {
-                        self.move_caret(terminal::MovementDirection::Down, 1)?;
-                    } else if self.user_controls.move_right == c {
-                        self.move_caret(terminal::MovementDirection::Right, 1)?;
-                    } else if self.user_controls.insert_mode == c {
-                        self.change_to_insert_mode()?;
-                    }
+            match read() {
+                Ok(event) => self.handle_event(event)?,
+                Err(err) => {
+                    error!("Couldn't read event: {err}");
+                    panic!("couldn't read event correctly");
                 }
-                KeyCode::PageUp
-                | KeyCode::PageDown
-                | KeyCode::Home
-                | KeyCode::End
-                | KeyCode::Left
-                | KeyCode::Right
-                | KeyCode::Up
-                | KeyCode::Down => self.handle_movement_keys(&event.code)?,
-                _ => (),
             }
         }
 
         Ok(())
     }
 
-    fn evaluate_insert_event(&mut self, event: &Event) -> Result<(), std::io::Error> {
-        if let Key(event) = *event {
-            match event.code {
-                // print the character if there is a file
-                Char(_) => todo!(),
+    fn handle_event(&mut self, event: Event) -> Result<(), std::io::Error> {
+        if let Event::Resize(width, height) = event {
+            self.view.update_terminal_size(width, height);
+        } else if let Event::Mouse(mouse_event) = event {
+            self.handle_mouse_events(mouse_event.kind);
+        } else if let Key(key_event) = event {
+            match key_event.code {
                 KeyCode::PageUp
                 | KeyCode::PageDown
                 | KeyCode::Home
@@ -121,10 +102,43 @@ impl Editor {
                 | KeyCode::Left
                 | KeyCode::Right
                 | KeyCode::Up
-                | KeyCode::Down => self.handle_movement_keys(&event.code)?,
-                KeyCode::Esc => self.change_to_normal_mode()?,
-                _ => (),
+                | KeyCode::Down => self.handle_movement_keys(&key_event.code)?,
+                Char('q') if key_event.modifiers == KeyModifiers::CONTROL => {
+                    self.should_quit = true
+                }
+                _ => match self.current_mode {
+                    EditorMode::Normal => self.evaluate_normal_event(key_event)?,
+                    EditorMode::Insert => self.evaluate_insert_event(key_event)?,
+                },
             }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate_normal_event(&mut self, event: KeyEvent) -> Result<(), std::io::Error> {
+        if let Char(c) = event.code {
+            if self.user_controls.move_left == c {
+                self.move_caret(terminal::MovementDirection::Left, 1)?;
+            } else if self.user_controls.move_up == c {
+                self.move_caret(terminal::MovementDirection::Up, 1)?;
+            } else if self.user_controls.move_down == c {
+                self.move_caret(terminal::MovementDirection::Down, 1)?;
+            } else if self.user_controls.move_right == c {
+                self.move_caret(terminal::MovementDirection::Right, 1)?;
+            } else if self.user_controls.insert_mode == c {
+                self.change_to_insert_mode();
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate_insert_event(&mut self, event: KeyEvent) -> Result<(), std::io::Error> {
+        match event.code {
+            Char(_) => self.view.needs_redraw = true,
+            KeyCode::Esc => self.change_to_normal_mode(),
+            _ => (),
         }
 
         Ok(())
@@ -146,36 +160,48 @@ impl Editor {
         Ok(())
     }
 
+    fn handle_mouse_events(&mut self, mouse_event: MouseEventKind) {
+        match mouse_event {
+            MouseEventKind::ScrollDown => todo!(),
+            MouseEventKind::ScrollUp => todo!(),
+            MouseEventKind::ScrollLeft => todo!(),
+            MouseEventKind::ScrollRight => todo!(),
+            _ => (),
+        }
+    }
+
     fn quit() -> Result<(), std::io::Error> {
         terminal::clear_screen()?;
-        terminal::print("Closing hecto...")?;
         terminal::execute_queue()
     }
 
-    fn refresh_screen(&self) -> Result<(), std::io::Error> {
+    fn refresh_screen(&mut self) -> Result<(), std::io::Error> {
         if self.should_quit {
             Self::quit()
-        } else {
+        } else if self.view.needs_redraw {
             if self.view.buffer.is_empty() {
                 self.view.render_title_screen()?;
             } else {
                 self.view.render()?;
             }
+
             terminal::move_cursor_to(&self.location)
+        } else {
+            Ok(())
         }
     }
 
-    fn change_to_insert_mode(&mut self) -> Result<(), std::io::Error> {
+    fn change_to_insert_mode(&mut self) {
         self.current_mode = EditorMode::Insert;
-        terminal::change_to_insert_caret()
+        terminal::change_to_insert_caret();
     }
 
-    fn change_to_normal_mode(&mut self) -> Result<(), std::io::Error> {
+    fn change_to_normal_mode(&mut self) {
         self.current_mode = EditorMode::Normal;
-        terminal::change_to_normal_caret()
+        terminal::change_to_normal_caret();
     }
 
-    fn move_caret(
+    pub fn move_caret(
         &mut self,
         direction: MovementDirection,
         amount: usize,
@@ -186,9 +212,11 @@ impl Editor {
             MovementDirection::Up if self.location.y > 0 => self.location.y -= amount,
             MovementDirection::Down => self.location.y += amount,
             MovementDirection::Top => self.location.y = 0,
-            MovementDirection::Bottom => self.location.y = crossterm::terminal::size()?.1 as usize,
+            MovementDirection::Bottom => {
+                self.location.y = crossterm::terminal::size().unwrap_or_default().1 as usize
+            }
             MovementDirection::FullRight => {
-                self.location.x = crossterm::terminal::size()?.0 as usize
+                self.location.x = crossterm::terminal::size().unwrap_or_default().0 as usize
             }
             MovementDirection::FullLeft => self.location.x = 0,
             _ => (),
