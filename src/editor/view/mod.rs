@@ -2,7 +2,7 @@ use std::io::Error;
 
 use buffer::Buffer;
 
-use super::terminal;
+use super::terminal::{self, MovementDirection};
 
 mod buffer;
 
@@ -12,10 +12,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct View {
     pub buffer: Buffer,
     pub needs_redraw: bool,
-    position: terminal::Position,
-    scroll_offset: terminal::Position,
-    width: u16,
-    height: u16,
+    pub scroll_offset: terminal::Position,
+    pub width: u16,
+    pub height: u16,
 }
 
 impl Default for View {
@@ -26,7 +25,6 @@ impl Default for View {
         View {
             buffer: Buffer::default(),
             needs_redraw: true,
-            position: terminal::Position { x: 0, y: 0 },
             scroll_offset: terminal::Position { x: 0, y: 0 },
             width: terminal_width,
             height: terminal_height,
@@ -35,7 +33,7 @@ impl Default for View {
 }
 
 impl View {
-    pub fn render(&mut self) -> Result<(), Error> {
+    pub fn _render_wrapped(&mut self) -> Result<(), Error> {
         terminal::clear_screen()?;
         let mut row = 0;
         let mut text_line = 0;
@@ -47,10 +45,30 @@ impl View {
             })?;
             if let Some(line) = self.buffer.contents.get(text_line as usize) {
                 text_line += 1;
-                row += self.draw_line(&line.to_string(), row as usize)? as u16;
+                row += self._draw_line_wrapped(&line.to_string(), row as usize)? as u16;
             }
         }
 
+        self.needs_redraw = false;
+        terminal::execute_queue()
+    }
+
+    pub fn render(&mut self) -> Result<(), Error> {
+        terminal::clear_screen()?;
+
+        for row in 0..self.height {
+            terminal::move_cursor_to(&terminal::Position {
+                x: 0,
+                y: row as usize,
+            })?;
+            if let Some(text) = self
+                .buffer
+                .contents
+                .get(row as usize + self.scroll_offset.y)
+            {
+                self.draw_line(&text.to_owned())?;
+            }
+        }
         self.needs_redraw = false;
         terminal::execute_queue()
     }
@@ -69,11 +87,11 @@ impl View {
         terminal::execute_queue()
     }
 
-    fn draw_empty_line() -> Result<(), std::io::Error> {
+    fn draw_empty_line() -> Result<(), Error> {
         terminal::print("~")
     }
 
-    fn draw_title() -> Result<(), std::io::Error> {
+    fn draw_title() -> Result<(), Error> {
         let title_y_position = (crossterm::terminal::size()?.1 / 3) - 2;
         let title_x_position = (crossterm::terminal::size()?.0 / 2) - 2;
 
@@ -92,9 +110,7 @@ impl View {
         terminal::print(VERSION)
     }
 
-    fn draw_line(&mut self, line: &str, row: usize) -> Result<usize, std::io::Error> {
-        self.needs_redraw = false;
-
+    fn _draw_line_wrapped(&self, line: &str, row: usize) -> Result<usize, Error> {
         let mut lines_used = 1;
         let mut l_pointer = 0;
         let mut r_pointer = self.width as usize;
@@ -111,6 +127,14 @@ impl View {
         terminal::print(line[l_pointer..line.len()].trim())?;
 
         Ok(lines_used)
+    }
+
+    fn draw_line(&self, line: &str) -> Result<(), Error> {
+        let l_pointer = std::cmp::min(line.len(), self.scroll_offset.x);
+        let r_pointer = std::cmp::min(line.len(), self.width as usize + self.scroll_offset.x);
+
+        terminal::print(&line[l_pointer..r_pointer])?;
+        terminal::execute_queue()
     }
 
     fn fill_buffer(&mut self, file_contents: &str) {
@@ -133,5 +157,29 @@ impl View {
         }
 
         Ok(())
+    }
+
+    pub fn scroll(&mut self, direction: MovementDirection, amount: usize) {
+        match direction {
+            MovementDirection::Left => {
+                if self.scroll_offset.x > 0 {
+                    self.scroll_offset.x -= amount;
+                }
+            }
+            MovementDirection::Right => {
+                self.scroll_offset.x += amount;
+            }
+            MovementDirection::Up => {
+                if self.scroll_offset.y > 0 {
+                    self.scroll_offset.y -= amount;
+                }
+            }
+            MovementDirection::Down => {
+                self.scroll_offset.y += amount;
+            }
+            _ => (),
+        }
+
+        self.needs_redraw = true;
     }
 }

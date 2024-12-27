@@ -161,13 +161,15 @@ impl Editor {
     }
 
     fn handle_mouse_events(&mut self, mouse_event: MouseEventKind) {
-        match mouse_event {
-            MouseEventKind::ScrollDown => todo!(),
-            MouseEventKind::ScrollUp => todo!(),
-            MouseEventKind::ScrollLeft => todo!(),
-            MouseEventKind::ScrollRight => todo!(),
-            _ => (),
-        }
+        let direction = match mouse_event {
+            MouseEventKind::ScrollDown => MovementDirection::Down,
+            MouseEventKind::ScrollUp => MovementDirection::Up,
+            MouseEventKind::ScrollLeft => MovementDirection::Left,
+            MouseEventKind::ScrollRight => MovementDirection::Right,
+            _ => return,
+        };
+
+        self.view.scroll(direction, 1);
     }
 
     fn quit() -> Result<(), std::io::Error> {
@@ -207,10 +209,34 @@ impl Editor {
         amount: usize,
     ) -> Result<(), std::io::Error> {
         match direction {
-            MovementDirection::Left if self.location.x > 0 => self.location.x -= amount,
-            MovementDirection::Right => self.location.x += amount,
-            MovementDirection::Up if self.location.y > 0 => self.location.y -= amount,
-            MovementDirection::Down => self.location.y += amount,
+            MovementDirection::Left => {
+                if self.location.x > 0 {
+                    self.location.x -= amount
+                } else {
+                    self.view.scroll(direction, amount)
+                }
+            }
+            MovementDirection::Right => {
+                if self.location.x >= self.view.width as usize {
+                    self.view.scroll(direction, amount);
+                } else {
+                    self.location.x += amount;
+                }
+            }
+            MovementDirection::Up => {
+                if self.location.y > 0 {
+                    self.location.y -= amount
+                } else {
+                    self.view.scroll(direction, amount)
+                }
+            }
+            MovementDirection::Down => {
+                if self.location.y >= self.view.height as usize {
+                    self.view.scroll(direction, amount);
+                } else {
+                    self.location.y += amount;
+                }
+            }
             MovementDirection::Top => self.location.y = 0,
             MovementDirection::Bottom => {
                 self.location.y = crossterm::terminal::size().unwrap_or_default().1 as usize
@@ -219,7 +245,6 @@ impl Editor {
                 self.location.x = crossterm::terminal::size().unwrap_or_default().0 as usize
             }
             MovementDirection::FullLeft => self.location.x = 0,
-            _ => (),
         }
 
         terminal::move_cursor_to(&self.location)
