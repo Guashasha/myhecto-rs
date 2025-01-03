@@ -1,4 +1,7 @@
-use std::io::{stdout, Error, Write};
+use std::{
+    fmt::Display,
+    io::{stdout, Error, Write},
+};
 
 use crossterm::{
     queue,
@@ -9,9 +12,16 @@ use crossterm::{
 };
 use log::error;
 
+#[derive(Default)]
 pub struct Position {
     pub x: usize,
     pub y: usize,
+}
+
+impl Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "x: {}, y: {}", self.x, self.y)
+    }
 }
 
 pub enum MovementDirection {

@@ -1,6 +1,8 @@
-use std::io::Error;
+use core::panic;
+use std::{fmt::Display, io::Error, thread::current};
 
 use buffer::Buffer;
+use log::error;
 
 use super::terminal::{self, MovementDirection};
 
@@ -13,8 +15,10 @@ pub struct View {
     pub buffer: Buffer,
     pub needs_redraw: bool,
     pub scroll_offset: terminal::Position,
-    pub width: u16,
-    pub height: u16,
+    pub location: terminal::Position,
+    pub position: terminal::Position,
+    width: u16,
+    height: u16,
 }
 
 impl Default for View {
@@ -25,7 +29,9 @@ impl Default for View {
         View {
             buffer: Buffer::default(),
             needs_redraw: true,
-            scroll_offset: terminal::Position { x: 0, y: 0 },
+            scroll_offset: terminal::Position::default(),
+            location: terminal::Position::default(),
+            position: terminal::Position { x: 0, y: 0 },
             width: terminal_width,
             height: terminal_height,
         }
@@ -144,6 +150,7 @@ impl View {
     }
 
     pub fn update_terminal_size(&mut self, width: u16, height: u16) {
+        // TODO update location and position when making terminal smaller
         self.height = height;
         self.width = width;
         self.needs_redraw = true;
@@ -181,5 +188,122 @@ impl View {
         }
 
         self.needs_redraw = true;
+    }
+
+    pub fn move_caret(
+        &mut self,
+        direction: MovementDirection,
+        amount: usize,
+    ) -> Result<(), std::io::Error> {
+        match direction {
+            MovementDirection::Left => {
+                if self.location.x > 0 {
+                    self.location.x -= amount;
+                }
+
+                if self.position.x > 0 {
+                    self.position.x -= amount;
+                } else {
+                    self.scroll(direction, amount)
+                }
+            }
+            MovementDirection::Right => {
+                let current_line = match self.buffer.contents.get(self.location.y) {
+                    Some(line) => line,
+                    None => {
+                        error!(
+                            "The view position on text is invalid:\rLocation: {}",
+                            self.location
+                        );
+                        panic!("The position on text is invalid");
+                    }
+                };
+
+                if self.location.x < current_line.len() {
+                    self.location.x = std::cmp::min(self.location.x + amount, current_line.len());
+
+                    if self.position.x >= self.width as usize {
+                        self.scroll(direction, amount);
+                    } else {
+                        self.position.x += amount;
+                    }
+                }
+            }
+            MovementDirection::Up => {
+                if self.location.y > 0 {
+                    self.location.y -= amount;
+                }
+
+                if self.position.y > 0 {
+                    self.position.y -= amount;
+                } else {
+                    self.scroll(direction, amount)
+                }
+            }
+            MovementDirection::Down => {
+                if self.location.y <= self.buffer.contents.len() {
+                    self.location.y += amount;
+
+                    if self.position.y >= self.height as usize {
+                        self.scroll(direction, amount);
+                    } else {
+                        self.position.y += amount;
+                    }
+                }
+            }
+            MovementDirection::Top => {
+                if self.location.y == 0 || self.position.y == 0 {
+                    return Ok(());
+                }
+                self.location.y -= self.position.y - 1;
+                self.position.y = 0;
+            }
+            MovementDirection::Bottom => {
+                if self.location.y >= self.buffer.contents.len() - 1
+                    || self.position.y >= self.height as usize
+                {
+                    return Ok(());
+                }
+
+                let movement_force =
+                    std::cmp::min(self.height as usize, self.buffer.contents.len());
+                let movement_dif = movement_force as usize - self.position.y - 1;
+                self.location.y += movement_dif;
+                self.position.y = movement_force as usize;
+            }
+            MovementDirection::FullRight => {
+                let current_line = match self.buffer.contents.get(self.location.y) {
+                    Some(line) => line,
+                    None => {
+                        error!(
+                            "The view position on text is invalid:\rLocation: {}",
+                            self.location
+                        );
+                        panic!("The position on text is invalid");
+                    }
+                };
+
+                let location_distance_till_end = current_line.len() - self.location.x;
+                self.location.x = current_line.len();
+
+                if current_line.len() > self.width as usize {
+                    let caret_distance_till_end = self.width as usize - self.position.x;
+                    self.position.x = self.width as usize;
+                    self.scroll(
+                        MovementDirection::Right,
+                        location_distance_till_end - caret_distance_till_end,
+                    );
+                } else {
+                    self.position.x = current_line.len();
+                }
+            }
+            MovementDirection::FullLeft => {
+                self.position.x = 0;
+                self.location.x = 0;
+                self.scroll(MovementDirection::Left, self.scroll_offset.x);
+            }
+        }
+
+        terminal::move_cursor_to(&self.position)
     }
 }

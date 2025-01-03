@@ -3,12 +3,12 @@ use std::panic::{set_hook, take_hook};
 use log::error;
 
 use crossterm::event::{
-    self, read,
+    read,
     Event::{self, Key},
     KeyCode::{self, Char},
-    KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+    KeyEvent, KeyModifiers, MouseEventKind,
 };
-use terminal::{MovementDirection, Position};
+use terminal::MovementDirection;
 use view::View;
 
 mod terminal;
@@ -19,7 +19,6 @@ pub struct Editor {
     user_controls: user_configuration::UserControls,
     current_mode: EditorMode,
     should_quit: bool,
-    location: terminal::Position,
     view: View,
 }
 
@@ -52,7 +51,6 @@ impl Editor {
             ),
             current_mode: EditorMode::Normal,
             should_quit: false,
-            location: Position { x: 0, y: 0 },
             view: View::default(),
         };
 
@@ -119,13 +117,14 @@ impl Editor {
     fn evaluate_normal_event(&mut self, event: KeyEvent) -> Result<(), std::io::Error> {
         if let Char(c) = event.code {
             if self.user_controls.move_left == c {
-                self.move_caret(terminal::MovementDirection::Left, 1)?;
+                self.view.move_caret(terminal::MovementDirection::Left, 1)?;
             } else if self.user_controls.move_up == c {
-                self.move_caret(terminal::MovementDirection::Up, 1)?;
+                self.view.move_caret(terminal::MovementDirection::Up, 1)?;
             } else if self.user_controls.move_down == c {
-                self.move_caret(terminal::MovementDirection::Down, 1)?;
+                self.view.move_caret(terminal::MovementDirection::Down, 1)?;
             } else if self.user_controls.move_right == c {
-                self.move_caret(terminal::MovementDirection::Right, 1)?;
+                self.view
+                    .move_caret(terminal::MovementDirection::Right, 1)?;
             } else if self.user_controls.insert_mode == c {
                 self.change_to_insert_mode();
             }
@@ -146,14 +145,14 @@ impl Editor {
 
     fn handle_movement_keys(&mut self, key: &KeyCode) -> Result<(), std::io::Error> {
         match key {
-            KeyCode::PageUp => self.move_caret(MovementDirection::Top, 0)?,
-            KeyCode::PageDown => self.move_caret(MovementDirection::Bottom, 0)?,
-            KeyCode::Home => self.move_caret(MovementDirection::FullLeft, 0)?,
-            KeyCode::End => self.move_caret(MovementDirection::FullRight, 0)?,
-            KeyCode::Left => self.move_caret(MovementDirection::Left, 1)?,
-            KeyCode::Right => self.move_caret(MovementDirection::Right, 1)?,
-            KeyCode::Up => self.move_caret(MovementDirection::Up, 1)?,
-            KeyCode::Down => self.move_caret(MovementDirection::Down, 1)?,
+            KeyCode::PageUp => self.view.move_caret(MovementDirection::Top, 0)?,
+            KeyCode::PageDown => self.view.move_caret(MovementDirection::Bottom, 0)?,
+            KeyCode::Home => self.view.move_caret(MovementDirection::FullLeft, 0)?,
+            KeyCode::End => self.view.move_caret(MovementDirection::FullRight, 0)?,
+            KeyCode::Left => self.view.move_caret(MovementDirection::Left, 1)?,
+            KeyCode::Right => self.view.move_caret(MovementDirection::Right, 1)?,
+            KeyCode::Up => self.view.move_caret(MovementDirection::Up, 1)?,
+            KeyCode::Down => self.view.move_caret(MovementDirection::Down, 1)?,
             _ => (),
         }
 
@@ -187,7 +186,7 @@ impl Editor {
                 self.view.render()?;
             }
 
-            terminal::move_cursor_to(&self.location)
+            terminal::move_cursor_to(&self.view.position)
         } else {
             Ok(())
         }
@@ -201,52 +200,5 @@ impl Editor {
     fn change_to_normal_mode(&mut self) {
         self.current_mode = EditorMode::Normal;
         terminal::change_to_normal_caret();
-    }
-
-    pub fn move_caret(
-        &mut self,
-        direction: MovementDirection,
-        amount: usize,
-    ) -> Result<(), std::io::Error> {
-        match direction {
-            MovementDirection::Left => {
-                if self.location.x > 0 {
-                    self.location.x -= amount
-                } else {
-                    self.view.scroll(direction, amount)
-                }
-            }
-            MovementDirection::Right => {
-                if self.location.x >= self.view.width as usize {
-                    self.view.scroll(direction, amount);
-                } else {
-                    self.location.x += amount;
-                }
-            }
-            MovementDirection::Up => {
-                if self.location.y > 0 {
-                    self.location.y -= amount
-                } else {
-                    self.view.scroll(direction, amount)
-                }
-            }
-            MovementDirection::Down => {
-                if self.location.y >= self.view.height as usize {
-                    self.view.scroll(direction, amount);
-                } else {
-                    self.location.y += amount;
-                }
-            }
-            MovementDirection::Top => self.location.y = 0,
-            MovementDirection::Bottom => {
-                self.location.y = crossterm::terminal::size().unwrap_or_default().1 as usize
-            }
-            MovementDirection::FullRight => {
-                self.location.x = crossterm::terminal::size().unwrap_or_default().0 as usize
-            }
-            MovementDirection::FullLeft => self.location.x = 0,
-        }
-
-        terminal::move_cursor_to(&self.location)
     }
 }
